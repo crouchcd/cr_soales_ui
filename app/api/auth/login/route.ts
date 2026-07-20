@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 
+import { absoluteUrl } from "@/lib/absolute-url";
 import { createAccessToken } from "@/lib/access-token";
 
 const COOKIE_NAME = "cr_soales_access";
@@ -24,12 +25,12 @@ export async function POST(request: Request) {
   }
 
   if (email !== accessEmail || password !== accessPassword) {
-    return NextResponse.redirect(new URL("/login?error=1", request.url), 303);
+    return NextResponse.redirect(absoluteUrl(request, "/login?error=1"), 303);
   }
 
   const token = await createAccessToken(cookieSecret, SESSION_TTL_SECONDS);
 
-  const response = NextResponse.redirect(new URL("/admin", request.url), 303);
+  const response = NextResponse.redirect(absoluteUrl(request, "/admin"), 303);
   response.cookies.set({
     name: COOKIE_NAME,
     value: token,

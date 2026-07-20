@@ -1,6 +1,7 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 
+import { absoluteUrl } from "@/lib/absolute-url";
 import { verifyAccessToken } from "@/lib/access-token";
 
 const COOKIE_NAME = "cr_soales_access";
@@ -26,13 +27,13 @@ export async function proxy(request: NextRequest) {
 
   if (pathname === "/login" || pathname === "/access") {
     if (authenticated) {
-      return NextResponse.redirect(new URL("/admin", request.url));
+      return NextResponse.redirect(absoluteUrl(request, "/admin"));
     }
     return NextResponse.next();
   }
 
   if (isProtectedPath(pathname) && !authenticated) {
-    return NextResponse.redirect(new URL("/login", request.url));
+    return NextResponse.redirect(absoluteUrl(request, "/login"));
   }
 
   return NextResponse.next();
