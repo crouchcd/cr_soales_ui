@@ -1,14 +1,19 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { LoadingSignal } from "@/components/loading-signal";
 import {
+  fetchGoldScoringExperiments,
   fetchGoldScoringReport,
+  type GoldScoringExperimentSummary,
   type GoldScoringField,
   type GoldScoringPaper,
   type GoldScoringReport,
 } from "@/lib/gold-scoring-api";
+
+// Debounce for the experiment picker's search-as-you-type.
+const SEARCH_DEBOUNCE_MS = 250;
 
 const PASS_THRESHOLD = 0.85;
 
@@ -321,6 +326,128 @@ function FrequencyTable({ report }: { report: GoldScoringReport }) {
   );
 }
 
+const fmtExperimentTime = (iso: string) =>
+  new Date(iso).toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+
+/** Text input + quick-pick dropdown for a Langfuse experiment: empty shows
+ * the 5 most recent, typing searches by name further back than that.
+ * Selecting an option fills the field and fires `onPick` immediately;
+ * typing a raw ID and never opening the dropdown still works via `value`. */
+function ExperimentPicker({
+  value,
+  onChange,
+  onPick,
+  disabled,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  onPick: (experimentId: string) => void;
+  disabled: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const [options, setOptions] = useState<GoldScoringExperimentSummary[]>([]);
+  const [optionsLoading, setOptionsLoading] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const requestIdRef = useRef(0);
+
+  useEffect(() => {
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+    };
+  }, []);
+
+  useEffect(() => {
+    const onClickOutside = (event: MouseEvent) => {
+      if (!containerRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onClickOutside);
+    return () => document.removeEventListener("mousedown", onClickOutside);
+  }, []);
+
+  const runSearch = (query: string) => {
+    const requestId = ++requestIdRef.current;
+    setOptionsLoading(true);
+    fetchGoldScoringExperiments(query)
+      .then((results) => {
+        if (requestIdRef.current === requestId) setOptions(results);
+      })
+      .catch(() => {
+        if (requestIdRef.current === requestId) setOptions([]);
+      })
+      .finally(() => {
+        if (requestIdRef.current === requestId) setOptionsLoading(false);
+      });
+  };
+
+  const onFocus = () => {
+    setOpen(true);
+    if (options.length === 0) runSearch(value);
+  };
+
+  const onInputChange = (next: string) => {
+    onChange(next);
+    setOpen(true);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => runSearch(next), SEARCH_DEBOUNCE_MS);
+  };
+
+  const onSelect = (option: GoldScoringExperimentSummary) => {
+    onChange(option.id);
+    setOpen(false);
+    onPick(option.id);
+  };
+
+  return (
+    <div ref={containerRef} className="relative">
+      <input
+        type="text"
+        value={value}
+        onChange={(event) => onInputChange(event.target.value)}
+        onFocus={onFocus}
+        placeholder="Search experiments, or paste an ID"
+        className="soales-input"
+        disabled={disabled}
+      />
+      {open ? (
+        <div className="absolute z-10 mt-1 max-h-72 w-full overflow-y-auto rounded border border-[#1f2937] bg-[#0b1220] shadow-lg">
+          {optionsLoading ? (
+            <p className="px-3 py-2 text-sm text-[#9ca3af]">Loading…</p>
+          ) : options.length === 0 ? (
+            <p className="px-3 py-2 text-sm text-[#9ca3af]">No matching experiments.</p>
+          ) : (
+            options.map((option) => (
+              <button
+                key={option.id}
+                type="button"
+                onClick={() => onSelect(option)}
+                className="block w-full border-b border-[#1f2937] px-3 py-2 text-left last:border-b-0 hover:bg-[#1e293b]"
+              >
+                <div className="flex items-baseline justify-between gap-3">
+                  <span className="soales-mono truncate text-sm text-[#dae2fd]">
+                    {option.name}
+                  </span>
+                  <span className="soales-mono shrink-0 text-[10px] text-[#9ca3af]">
+                    {fmtExperimentTime(option.startTime)}
+                  </span>
+                </div>
+                <span className="soales-mono text-[10px] uppercase tracking-widest text-[#9ca3af]">
+                  {option.itemCount} papers
+                </span>
+              </button>
+            ))
+          )}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export default function GoldScoringReportView() {
   const [experimentId, setExperimentId] = useState("");
   const [loading, setLoading] = useState(false);
@@ -331,17 +458,11 @@ export default function GoldScoringReportView() {
   const [onlyFailing, setOnlyFailing] = useState(false);
   const [openPromptKeys, setOpenPromptKeys] = useState<Set<string>>(new Set());
 
-  const onSubmit = async (event: React.FormEvent) => {
-    event.preventDefault();
-    const trimmed = experimentId.trim();
-    if (!trimmed) {
-      setError("Enter a Langfuse experiment ID.");
-      return;
-    }
+  const buildReport = async (id: string) => {
     setError("");
     setLoading(true);
     try {
-      const nextReport = await fetchGoldScoringReport(trimmed);
+      const nextReport = await fetchGoldScoringReport(id);
       setReport(nextReport);
       setSelectedPaperId(nextReport.papers[0]?.paper_id ?? null);
       setActiveTab("papers");
@@ -351,6 +472,16 @@ export default function GoldScoringReportView() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const onSubmit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    const trimmed = experimentId.trim();
+    if (!trimmed) {
+      setError("Enter a Langfuse experiment ID.");
+      return;
+    }
+    await buildReport(trimmed);
   };
 
   const togglePromptKey = (key: string) => {
@@ -386,14 +517,12 @@ export default function GoldScoringReportView() {
       <form onSubmit={onSubmit} className="flex flex-wrap items-end gap-3">
         <label className="grid min-w-72 gap-1 text-sm">
           <span className="soales-mono text-[10px] uppercase text-[#ccc3d8]">
-            Langfuse experiment ID
+            Langfuse experiment
           </span>
-          <input
-            type="text"
+          <ExperimentPicker
             value={experimentId}
-            onChange={(event) => setExperimentId(event.target.value)}
-            placeholder="e1647b7d-3d04-4029-9cd3-afb133d26ba3"
-            className="soales-input"
+            onChange={setExperimentId}
+            onPick={buildReport}
             disabled={loading}
           />
         </label>

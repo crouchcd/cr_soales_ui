@@ -12,6 +12,7 @@ const joinPath = (...parts: string[]) => {
 };
 
 const REPORT_PATH = joinPath(API_PREFIX, "gold_scoring", "report");
+const EXPERIMENTS_PATH = joinPath(API_PREFIX, "gold_scoring", "experiments");
 
 export type GoldScoringCitation = {
   page: number | string | null;
@@ -54,6 +55,26 @@ export type GoldScoringReport = {
   papers: GoldScoringPaper[];
   prompts: Record<string, GoldScoringPrompt>;
   generatedAt: string;
+};
+
+export type GoldScoringExperimentSummary = {
+  id: string;
+  name: string;
+  itemCount: number;
+  startTime: string;
+};
+
+/** With no `query`, the 5 most recent experiments. With one, up to 20 name
+ * matches -- reaching further back than the plain recent-5 list. */
+export const fetchGoldScoringExperiments = async (
+  query?: string,
+): Promise<GoldScoringExperimentSummary[]> => {
+  const url = new URL(`${API_BASE_URL}${EXPERIMENTS_PATH}`);
+  if (query?.trim()) url.searchParams.set("q", query.trim());
+
+  const response = await fetch(url.toString(), { method: "GET" });
+  if (!response.ok) throw new Error(await response.text());
+  return response.json() as Promise<GoldScoringExperimentSummary[]>;
 };
 
 export const fetchGoldScoringReport = async (
