@@ -223,6 +223,16 @@ function PaperDetail({
         <span className="soales-chip text-[10px] uppercase tracking-widest">
           {fmtPct(paper.fields_passed_ratio)} fields passed
         </span>
+        {paper.traceUrl ? (
+          <a
+            href={paper.traceUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="soales-mono text-xs text-[#93c5fd] underline-offset-2 hover:underline"
+          >
+            View trace in Langfuse ↗
+          </a>
+        ) : null}
       </div>
 
       <label className="flex items-center gap-2 text-sm text-[#ccc3d8]">

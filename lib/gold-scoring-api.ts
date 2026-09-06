@@ -36,6 +36,7 @@ export type GoldScoringPaper = {
   fields_passed_ratio: number | null;
   overall_pass: boolean | null;
   fields: GoldScoringField[];
+  traceUrl: string | null;
 };
 
 export type GoldScoringPrompt = {
