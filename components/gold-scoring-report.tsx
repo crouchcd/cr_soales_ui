@@ -563,6 +563,20 @@ export default function GoldScoringReportView() {
 
       {report ? (
         <>
+          <div className="flex flex-wrap items-baseline gap-3">
+            <span className="soales-mono text-xs text-[#9ca3af]">{report.experiment.name}</span>
+            {report.experiment.url ? (
+              <a
+                href={report.experiment.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="soales-mono text-xs text-[#93c5fd] underline-offset-2 hover:underline"
+              >
+                View experiment in Langfuse ↗
+              </a>
+            ) : null}
+          </div>
+
           <div className="flex flex-wrap gap-3">
             <div className="soales-panel px-5 py-4">
               <p className="soales-subheading text-3xl text-[#dae2fd]">{report.experiment.itemCount}</p>

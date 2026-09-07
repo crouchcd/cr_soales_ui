@@ -54,6 +54,7 @@ export type GoldScoringReport = {
     startTime: string;
     endTime: string;
     avgFieldsPassedRatio: number | null;
+    url: string | null;
   };
   papers: GoldScoringPaper[];
   prompts: Record<string, GoldScoringPrompt>;
