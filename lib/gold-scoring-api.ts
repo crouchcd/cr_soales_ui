@@ -42,6 +42,8 @@ export type GoldScoringPaper = {
 export type GoldScoringPrompt = {
   langfuseName: string;
   text: string;
+  version: number | null;
+  url: string | null;
 };
 
 export type GoldScoringReport = {

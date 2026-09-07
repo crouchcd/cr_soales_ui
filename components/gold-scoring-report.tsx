@@ -9,6 +9,7 @@ import {
   type GoldScoringExperimentSummary,
   type GoldScoringField,
   type GoldScoringPaper,
+  type GoldScoringPrompt,
   type GoldScoringReport,
 } from "@/lib/gold-scoring-api";
 
@@ -69,7 +70,7 @@ function FieldCard({
   onTogglePrompt,
 }: {
   field: GoldScoringField;
-  prompt: { langfuseName: string; text: string } | undefined;
+  prompt: GoldScoringPrompt | undefined;
   promptOpen: boolean;
   onTogglePrompt: () => void;
 }) {
@@ -174,9 +175,22 @@ function FieldCard({
 
       {prompt && promptOpen ? (
         <div className="mt-3 rounded border border-dashed border-[#475569] bg-[#0b1220] p-3">
-          <p className="soales-mono text-[10px] uppercase tracking-widest text-[#9ca3af]">
-            Prompt · {prompt.langfuseName}
-          </p>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="soales-mono text-[10px] uppercase tracking-widest text-[#9ca3af]">
+              Prompt · {prompt.langfuseName}
+              {prompt.version !== null ? ` · v${prompt.version}` : ""}
+            </p>
+            {prompt.url ? (
+              <a
+                href={prompt.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="soales-mono text-xs text-[#93c5fd] underline-offset-2 hover:underline"
+              >
+                View prompt in Langfuse ↗
+              </a>
+            ) : null}
+          </div>
           <pre className="mt-2 max-h-80 overflow-y-auto whitespace-pre-wrap break-words font-mono text-xs leading-5 text-[#e5e7eb]">
             {prompt.text}
           </pre>
