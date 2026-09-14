@@ -7,6 +7,7 @@ const navItems = [
   { href: "/admin", label: "Paper Upload", icon: "upload_file" },
   { href: "/admin/papers", label: "Papers", icon: "dataset" },
   { href: "/admin/queue", label: "Queue", icon: "queue" },
+  { href: "/admin/gold-scoring", label: "Gold Scoring", icon: "fact_check" },
 ];
 
 const isActivePath = (pathname: string, href: string) => {
