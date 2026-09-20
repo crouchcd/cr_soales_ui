@@ -8,6 +8,7 @@ import {
   fetchGoldScoringReport,
   type GoldScoringExperimentSummary,
   type GoldScoringField,
+  type GoldScoringFreeformField,
   type GoldScoringPaper,
   type GoldScoringPrompt,
   type GoldScoringReport,
@@ -205,6 +206,86 @@ function FieldCard({
   );
 }
 
+/** A free-form field has no reviewer answer to compare against -- no
+ * expected/citations/prompt columns, just what the manifest produced and
+ * how the judge scored it against its own eval_criteria (specs/
+ * prompt_experiment_ui/spec.md §5). */
+function FreeformCard({ field }: { field: GoldScoringFreeformField }) {
+  const actual = fmtValue(field.actual);
+  const tone = toneOf(field.score);
+  const pass = field.score !== null && field.score >= PASS_THRESHOLD;
+
+  return (
+    <div
+      className={`soales-panel border-l-4 p-4 ${
+        pass ? "border-l-[#4ade80]" : "border-l-[#ffb4ab]"
+      }`}
+    >
+      <div className="mb-3 flex flex-wrap items-baseline gap-2">
+        <span className="font-medium text-[#dae2fd]">{fieldLabel(field.key)}</span>
+      </div>
+
+      <div className="grid gap-3 md:grid-cols-[1.15fr_0.85fr]">
+        <div>
+          <span className="soales-mono block text-[10px] uppercase tracking-widest text-[#9ca3af]">
+            Actual (pipeline)
+          </span>
+          <div
+            className={`mt-1 whitespace-pre-wrap break-words rounded bg-[#1e293b] p-2 text-sm ${
+              actual.empty ? "italic text-[#9ca3af]" : "text-[#e5e7eb]"
+            }`}
+          >
+            {actual.text}
+          </div>
+          {field.evalCriteria ? (
+            <details className="mt-2 text-sm">
+              <summary className="cursor-pointer text-[#93c5fd]">Eval criteria</summary>
+              <div className="mt-2 whitespace-pre-wrap rounded bg-[#0b1220] p-2 text-xs text-[#ccc3d8]">
+                {field.evalCriteria}
+              </div>
+            </details>
+          ) : null}
+        </div>
+
+        <div className="flex flex-col items-start gap-2">
+          <span className="soales-mono block text-[10px] uppercase tracking-widest text-[#9ca3af]">
+            Eval
+          </span>
+          <span className="soales-chip text-[10px] uppercase tracking-widest">
+            {(field.tier ?? "judge").replace("_", " ")}
+          </span>
+          <span className={`soales-mono text-xl font-semibold ${TONE_TEXT[tone]}`}>
+            {field.score === null ? "—" : field.score.toFixed(2)}
+          </span>
+          {field.comment ? (
+            <details className="w-full text-sm">
+              <summary className="cursor-pointer text-[#93c5fd]">Judge rationale</summary>
+              <div className="mt-2 whitespace-pre-wrap rounded bg-[#0b1220] p-2 text-xs text-[#ccc3d8]">
+                {field.comment}
+              </div>
+            </details>
+          ) : null}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function FreeformSection({ freeform }: { freeform: GoldScoringFreeformField[] }) {
+  if (freeform.length === 0) return null;
+
+  return (
+    <div className="grid gap-3 border-t border-[#1f2937] pt-4">
+      <p className="soales-mono text-[10px] uppercase tracking-widest text-[#9ca3af]">
+        Free-form results ({freeform.length}) -- no reviewer answer to compare against
+      </p>
+      {freeform.map((field) => (
+        <FreeformCard key={field.key} field={field} />
+      ))}
+    </div>
+  );
+}
+
 function PaperDetail({
   paper,
   prompts,
@@ -273,6 +354,8 @@ function PaperDetail({
           );
         })}
       </div>
+
+      <FreeformSection freeform={paper.freeform} />
     </div>
   );
 }
@@ -472,8 +555,16 @@ function ExperimentPicker({
   );
 }
 
-export default function GoldScoringReportView() {
-  const [experimentId, setExperimentId] = useState("");
+export default function GoldScoringReportView({
+  initialExperimentId,
+}: {
+  /** Pre-fills and auto-loads a report on mount -- used by the prompt
+   * experimentation runner to land directly on a just-finished run's
+   * report (specs/prompt_experiment_ui/spec.md §4) without the person
+   * re-entering the experiment ID they already just produced. */
+  initialExperimentId?: string;
+} = {}) {
+  const [experimentId, setExperimentId] = useState(initialExperimentId ?? "");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [report, setReport] = useState<GoldScoringReport | null>(null);
@@ -497,6 +588,11 @@ export default function GoldScoringReportView() {
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    if (initialExperimentId) void buildReport(initialExperimentId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-once by design
+  }, []);
 
   const onSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
