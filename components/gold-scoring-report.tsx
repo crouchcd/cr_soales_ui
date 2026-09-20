@@ -444,17 +444,26 @@ const fmtExperimentTime = (iso: string) =>
 /** Text input + quick-pick dropdown for a Langfuse experiment: empty shows
  * the 5 most recent, typing searches by name further back than that.
  * Selecting an option fills the field and fires `onPick` immediately;
- * typing a raw ID and never opening the dropdown still works via `value`. */
-function ExperimentPicker({
+ * typing a raw ID and never opening the dropdown still works via `value`.
+ *
+ * `fetchOptions` is pluggable so this same component/UX serves both the
+ * unscoped admin gold-scoring picker (fetchGoldScoringExperiments) and the
+ * owner-scoped prompt-experimentation picker (fetchOwnerExperiments) --
+ * specs/prompt_experiment_ui/spec.md: "clone the gold-standard report UI,
+ * scoped to this token's owner" -- without duplicating the search/debounce/
+ * click-outside/dropdown logic. */
+export function ExperimentPicker({
   value,
   onChange,
   onPick,
   disabled,
+  fetchOptions,
 }: {
   value: string;
   onChange: (value: string) => void;
   onPick: (experimentId: string) => void;
   disabled: boolean;
+  fetchOptions: (query?: string) => Promise<GoldScoringExperimentSummary[]>;
 }) {
   const [open, setOpen] = useState(false);
   const [options, setOptions] = useState<GoldScoringExperimentSummary[]>([]);
@@ -480,7 +489,7 @@ function ExperimentPicker({
   const runSearch = (query: string) => {
     const requestId = ++requestIdRef.current;
     setOptionsLoading(true);
-    fetchGoldScoringExperiments(query)
+    fetchOptions(query)
       .then((results) => {
         if (requestIdRef.current === requestId) setOptions(results);
       })
@@ -644,6 +653,7 @@ export default function GoldScoringReportView({
             onChange={setExperimentId}
             onPick={buildReport}
             disabled={loading}
+            fetchOptions={fetchGoldScoringExperiments}
           />
         </label>
         <button type="submit" className="soales-button-primary" disabled={loading}>
