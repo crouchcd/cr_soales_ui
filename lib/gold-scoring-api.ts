@@ -31,11 +31,27 @@ export type GoldScoringField = {
   citations: GoldScoringCitation[];
 };
 
+/** A gold_row key a manifest declared with no gold-standard reference to
+ * compare against -- judged via eval_criteria instead of an exact-match/
+ * expected-vs-actual comparison (specs/scoped_prompt_experiments/spec.md
+ * §9, specs/prompt_experiment_ui/spec.md FR7). Additive: a pre-cutover
+ * experiment's papers report an empty array here, never this shape
+ * elsewhere. */
+export type GoldScoringFreeformField = {
+  key: string;
+  actual: unknown;
+  evalCriteria: string | null;
+  score: number | null;
+  tier: "exact_match" | "judge" | "judge_error" | null;
+  comment: string | null;
+};
+
 export type GoldScoringPaper = {
   paper_id: string;
   fields_passed_ratio: number | null;
   overall_pass: boolean | null;
   fields: GoldScoringField[];
+  freeform: GoldScoringFreeformField[];
   traceUrl: string | null;
 };
 
