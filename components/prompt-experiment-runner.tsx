@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 
 import GoldScoringReportView, { ExperimentPicker } from "@/components/gold-scoring-report";
 import {
@@ -9,13 +9,84 @@ import {
   fetchOwnerExperiments,
   InvalidTokenError,
   startPromptExperiment,
+  streamExperimentEvents,
   type ExperimentStatus,
+  type PaperStatus,
 } from "@/lib/prompt-experiment-api";
 
-// specs/prompt_experiment_ui/spec.md §4.
-const POLL_INTERVAL_MS = 3000;
 const TOKEN_STORAGE_KEY = "soales.promptExperiment.token";
 const RUN_ID_STORAGE_KEY = "soales.promptExperiment.runId";
+// specs/experiment_progress_detail/spec.md §5: how long to wait before
+// re-opening the live stream after it closes without a terminal event
+// (the reconnect-after-restart snapshot-and-close case) or errors.
+const STREAM_RETRY_DELAY_MS = 3000;
+
+const PAPER_PHASE_LABEL: Record<string, string> = {
+  ocr: "OCR",
+  eligibility: "eligibility",
+  extracting: "extracting",
+  finishing: "finishing",
+};
+
+function paperStatusLabel(paper: PaperStatus): string {
+  if (paper.status === "pending") return "pending";
+  if (paper.status === "succeeded") return "done";
+  if (paper.status === "failed") {
+    const where = paper.phase ? ` during ${PAPER_PHASE_LABEL[paper.phase] ?? paper.phase}` : "";
+    return `failed${where}${paper.error ? ` — ${paper.error}` : ""}`;
+  }
+  // in_flight
+  if (paper.phase === "extracting" && paper.fields_total != null) {
+    return `extracting (${paper.fields_done} of ${paper.fields_total})`;
+  }
+  return paper.phase ? PAPER_PHASE_LABEL[paper.phase] ?? paper.phase : "starting…";
+}
+
+/** Live per-paper list (specs/experiment_progress_detail/spec.md FR1-FR3,
+ * FR7) -- replaces the old "N of M papers complete" text + bar. Scrolls
+ * rather than sprawling for a full 18+ paper run, same pattern as
+ * PaperPicker above. */
+function PaperStatusList({ paperStatus }: { paperStatus: Record<string, PaperStatus> }) {
+  const entries = Object.entries(paperStatus).sort(([a], [b]) => a.localeCompare(b));
+  const counts = entries.reduce(
+    (acc, [, p]) => {
+      acc[p.status] = (acc[p.status] ?? 0) + 1;
+      return acc;
+    },
+    {} as Record<string, number>,
+  );
+
+  return (
+    <div className="grid gap-2">
+      <span className="soales-mono text-xs text-[#9ca3af]">
+        {counts.succeeded ?? 0} done · {counts.in_flight ?? 0} in progress ·{" "}
+        {counts.pending ?? 0} pending
+        {counts.failed ? ` · ${counts.failed} failed` : ""}
+      </span>
+      <div className="soales-panel grid max-h-72 gap-1 overflow-y-auto p-3">
+        {entries.map(([paperId, paper]) => (
+          <div
+            key={paperId}
+            className="flex items-center justify-between gap-3 text-sm"
+          >
+            <span className="soales-mono truncate text-[#ccc3d8]">{paperId}</span>
+            <span
+              className={
+                paper.status === "failed"
+                  ? "text-right text-xs text-[#ffb4ab]"
+                  : paper.status === "succeeded"
+                    ? "text-right text-xs text-[#93c5fd]"
+                    : "text-right text-xs text-[#9ca3af]"
+              }
+            >
+              {paperStatusLabel(paper)}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 /** Token entry: inline error on a 401, no redirect (spec §3). Once a
  * token is accepted the caller holds it for the tab (sessionStorage).
@@ -136,7 +207,6 @@ export default function PromptExperimentRunner() {
   // experiment is independent of the current run/idle state below it.
   const [pickerValue, setPickerValue] = useState("");
   const [viewedExperimentId, setViewedExperimentId] = useState<string | null>(null);
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Reconnect to a persisted token/run on mount or refresh (FR9) --
   // sessionStorage only, never the URL (spec §3).
@@ -163,24 +233,101 @@ export default function PromptExperimentRunner() {
       });
   }, [token]);
 
+  // One REST snapshot for the initial paint (also covers a refresh or
+  // return visit to an already-finished run), then a live SSE stream for
+  // updates while the run is still going (specs/experiment_progress_
+  // detail/spec.md §5). No automatic reconnect the way EventSource gives
+  // for free -- this effect re-opens the stream itself on an error or an
+  // early close (e.g. the reconnect-after-restart snapshot-and-close
+  // case) while the run still looks like it's running.
   useEffect(() => {
     if (!token || !runId) return;
+    let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    const controller = new AbortController();
 
-    const poll = () => {
-      fetchExperimentStatus(token, runId)
-        .then(setStatus)
-        .catch((err) => {
-          if (err instanceof InvalidTokenError) {
-            onInvalidToken();
+    const openStream = async () => {
+      if (cancelled) return;
+      try {
+        for await (const event of streamExperimentEvents(token, runId, controller.signal)) {
+          if (cancelled) return;
+          if (event.type === "paper") {
+            setStatus((prev) =>
+              prev
+                ? {
+                    ...prev,
+                    paper_status: {
+                      ...prev.paper_status,
+                      [event.paper_id]: {
+                        status: event.status,
+                        phase: event.phase,
+                        fields_done: event.fields_done,
+                        fields_total: event.fields_total,
+                        error: event.error,
+                      },
+                    },
+                  }
+                : prev,
+            );
+          } else if (event.type === "terminal") {
+            setStatus((prev) =>
+              prev
+                ? {
+                    ...prev,
+                    status: event.status,
+                    error: event.error,
+                    langfuse_experiment_id: event.langfuse_experiment_id,
+                  }
+                : prev,
+            );
             return;
+          } else {
+            setStatus((prev) =>
+              prev
+                ? {
+                    ...prev,
+                    status: event.status,
+                    error: event.error,
+                    paper_status: event.paper_status,
+                    langfuse_experiment_id: event.langfuse_experiment_id,
+                  }
+                : prev,
+            );
           }
-          setError(err instanceof Error ? err.message : "Could not fetch run status.");
-        });
+        }
+        // Stream closed without a terminal event -- retry rather than
+        // going silent.
+        if (!cancelled) retryTimer = setTimeout(openStream, STREAM_RETRY_DELAY_MS);
+      } catch (err) {
+        if (cancelled) return;
+        if (err instanceof InvalidTokenError) {
+          onInvalidToken();
+          return;
+        }
+        retryTimer = setTimeout(openStream, STREAM_RETRY_DELAY_MS);
+      }
     };
-    poll();
-    pollRef.current = setInterval(poll, POLL_INTERVAL_MS);
+
+    (async () => {
+      try {
+        const initial = await fetchExperimentStatus(token, runId);
+        if (cancelled) return;
+        setStatus(initial);
+        if (initial.status === "running") openStream();
+      } catch (err) {
+        if (cancelled) return;
+        if (err instanceof InvalidTokenError) {
+          onInvalidToken();
+          return;
+        }
+        setError(err instanceof Error ? err.message : "Could not fetch run status.");
+      }
+    })();
+
     return () => {
-      if (pollRef.current) clearInterval(pollRef.current);
+      cancelled = true;
+      controller.abort();
+      if (retryTimer) clearTimeout(retryTimer);
     };
   }, [token, runId]);
 
@@ -204,6 +351,21 @@ export default function PromptExperimentRunner() {
     setSelected(new Set());
     setError("");
     setTokenError("Your token is no longer valid -- please re-enter it.");
+  };
+
+  // Same reset as onInvalidToken, minus the error framing -- a deliberate
+  // switch to a different owner's token, not a failure. There was
+  // previously no way to do this short of clearing sessionStorage by hand.
+  const onLogout = () => {
+    window.sessionStorage.removeItem(TOKEN_STORAGE_KEY);
+    window.sessionStorage.removeItem(RUN_ID_STORAGE_KEY);
+    setToken(null);
+    setRunId(null);
+    setStatus(null);
+    setPaperIds([]);
+    setSelected(new Set());
+    setError("");
+    setTokenError("");
   };
 
   const onStart = async () => {
@@ -275,19 +437,11 @@ export default function PromptExperimentRunner() {
       </>
     );
   } else if (runId && status?.status !== "failed") {
-    const total = status?.total_items ?? 0;
-    const completed = status?.completed_items ?? 0;
-    const pct = total > 0 ? Math.round((completed / total) * 100) : 0;
     body = (
       <>
         <div className="soales-panel flex flex-wrap items-center gap-3 p-4">
           <span className="soales-loading-spinner" aria-hidden="true" />
-          <span className="text-sm text-[#ccc3d8]">
-            {status ? `${completed} of ${total} papers complete` : "Starting…"}
-          </span>
-          <div className="h-1.5 w-32 overflow-hidden rounded-full bg-[#1f2937]">
-            <span className="block h-full bg-[#93c5fd]" style={{ width: `${pct}%` }} />
-          </div>
+          <span className="text-sm text-[#ccc3d8]">{status ? "Running…" : "Starting…"}</span>
           <button
             type="button"
             className="soales-mono ml-auto text-xs text-[#9ca3af] underline-offset-2 hover:text-[#93c5fd] hover:underline"
@@ -296,6 +450,7 @@ export default function PromptExperimentRunner() {
             Clear
           </button>
         </div>
+        {status ? <PaperStatusList paperStatus={status.paper_status} /> : null}
         {error ? (
           <p className="text-sm text-[#ffb4ab]">
             {error} Tracking a run that no longer exists? Use &ldquo;Clear&rdquo; above to start fresh.
@@ -333,15 +488,24 @@ export default function PromptExperimentRunner() {
 
   return (
     <div className="grid gap-4">
-      <div className="soales-panel grid max-w-md gap-1 p-3">
-        <span className="soales-mono text-[10px] uppercase text-[#ccc3d8]">Your past experiments</span>
-        <ExperimentPicker
-          value={pickerValue}
-          onChange={setPickerValue}
-          onPick={setViewedExperimentId}
-          disabled={false}
-          fetchOptions={(q) => fetchOwnerExperiments(token, q)}
-        />
+      <div className="flex items-start justify-between gap-3">
+        <div className="soales-panel grid max-w-md flex-1 gap-1 p-3">
+          <span className="soales-mono text-[10px] uppercase text-[#ccc3d8]">Your past experiments</span>
+          <ExperimentPicker
+            value={pickerValue}
+            onChange={setPickerValue}
+            onPick={setViewedExperimentId}
+            disabled={false}
+            fetchOptions={(q) => fetchOwnerExperiments(token, q)}
+          />
+        </div>
+        <button
+          type="button"
+          className="soales-mono mt-1 shrink-0 text-xs text-[#9ca3af] underline-offset-2 hover:text-[#93c5fd] hover:underline"
+          onClick={onLogout}
+        >
+          Switch token
+        </button>
       </div>
       {body}
     </div>
