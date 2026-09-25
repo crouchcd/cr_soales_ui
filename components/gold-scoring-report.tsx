@@ -566,12 +566,16 @@ export function ExperimentPicker({
 
 export default function GoldScoringReportView({
   initialExperimentId,
+  fetchOptions = fetchGoldScoringExperiments,
 }: {
   /** Pre-fills and auto-loads a report on mount -- used by the prompt
    * experimentation runner to land directly on a just-finished run's
    * report (specs/prompt_experiment_ui/spec.md §4) without the person
    * re-entering the experiment ID they already just produced. */
   initialExperimentId?: string;
+  /** Picker search; the runner passes its owner-scoped one so this is the
+   * page's only experiment picker while a report is shown. */
+  fetchOptions?: (query?: string) => Promise<GoldScoringExperimentSummary[]>;
 } = {}) {
   const [experimentId, setExperimentId] = useState(initialExperimentId ?? "");
   const [loading, setLoading] = useState(false);
@@ -653,7 +657,7 @@ export default function GoldScoringReportView({
             onChange={setExperimentId}
             onPick={buildReport}
             disabled={loading}
-            fetchOptions={fetchGoldScoringExperiments}
+            fetchOptions={fetchOptions}
           />
         </label>
         <button type="submit" className="soales-button-primary" disabled={loading}>

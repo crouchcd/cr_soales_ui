@@ -405,6 +405,12 @@ export default function PromptExperimentRunner() {
 
   if (!token) return <TokenGate onReady={onTokenReady} initialError={tokenError} />;
 
+  const fetchOwnExperiments = (q?: string) => fetchOwnerExperiments(token, q);
+  // A shown report brings its own picker; don't stack a second one above it.
+  const showingReport =
+    Boolean(viewedExperimentId) ||
+    (status?.status === "succeeded" && Boolean(status.langfuse_experiment_id));
+
   let body: React.ReactNode;
 
   if (viewedExperimentId) {
@@ -417,7 +423,10 @@ export default function PromptExperimentRunner() {
         >
           ← Back
         </button>
-        <GoldScoringReportView initialExperimentId={viewedExperimentId} />
+        <GoldScoringReportView
+          initialExperimentId={viewedExperimentId}
+          fetchOptions={fetchOwnExperiments}
+        />
       </>
     );
   } else if (status?.status === "succeeded") {
@@ -427,7 +436,10 @@ export default function PromptExperimentRunner() {
           Run a new experiment
         </button>
         {status.langfuse_experiment_id ? (
-          <GoldScoringReportView initialExperimentId={status.langfuse_experiment_id} />
+          <GoldScoringReportView
+            initialExperimentId={status.langfuse_experiment_id}
+            fetchOptions={fetchOwnExperiments}
+          />
         ) : (
           <p className="text-sm text-[#ffb4ab]">
             Run finished, but no Langfuse experiment id was recorded -- check &ldquo;Your past
@@ -489,16 +501,22 @@ export default function PromptExperimentRunner() {
   return (
     <div className="grid gap-4">
       <div className="flex items-start justify-between gap-3">
-        <div className="soales-panel grid max-w-md flex-1 gap-1 p-3">
-          <span className="soales-mono text-[10px] uppercase text-[#ccc3d8]">Your past experiments</span>
-          <ExperimentPicker
-            value={pickerValue}
-            onChange={setPickerValue}
-            onPick={setViewedExperimentId}
-            disabled={false}
-            fetchOptions={(q) => fetchOwnerExperiments(token, q)}
-          />
-        </div>
+        {showingReport ? (
+          <div className="flex-1" />
+        ) : (
+          <div className="soales-panel grid max-w-md flex-1 gap-1 p-3">
+            <span className="soales-mono text-[10px] uppercase text-[#ccc3d8]">
+              Your past experiments
+            </span>
+            <ExperimentPicker
+              value={pickerValue}
+              onChange={setPickerValue}
+              onPick={setViewedExperimentId}
+              disabled={false}
+              fetchOptions={fetchOwnExperiments}
+            />
+          </div>
+        )}
         <button
           type="button"
           className="soales-mono mt-1 shrink-0 text-xs text-[#9ca3af] underline-offset-2 hover:text-[#93c5fd] hover:underline"
