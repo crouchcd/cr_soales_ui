@@ -564,9 +564,15 @@ export function ExperimentPicker({
   );
 }
 
+type ReportTab = "papers" | "frequency";
+
+// Query params that make a built report reproducible from its URL.
+const URL_PARAMS = { experiment: "experiment", paper: "paper", tab: "tab" } as const;
+
 export default function GoldScoringReportView({
   initialExperimentId,
   fetchOptions = fetchGoldScoringExperiments,
+  syncUrl = false,
 }: {
   /** Pre-fills and auto-loads a report on mount -- used by the prompt
    * experimentation runner to land directly on a just-finished run's
@@ -576,24 +582,32 @@ export default function GoldScoringReportView({
   /** Picker search; the runner passes its owner-scoped one so this is the
    * page's only experiment picker while a report is shown. */
   fetchOptions?: (query?: string) => Promise<GoldScoringExperimentSummary[]>;
+  /** Mirror experiment/paper/tab into the page's query string (and restore
+   * from it on mount) so a built report can be shared by URL. */
+  syncUrl?: boolean;
 } = {}) {
   const [experimentId, setExperimentId] = useState(initialExperimentId ?? "");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [report, setReport] = useState<GoldScoringReport | null>(null);
   const [selectedPaperId, setSelectedPaperId] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<"papers" | "frequency">("papers");
+  const [activeTab, setActiveTab] = useState<ReportTab>("papers");
   const [onlyFailing, setOnlyFailing] = useState(false);
   const [openPromptKeys, setOpenPromptKeys] = useState<Set<string>>(new Set());
+  const [linkCopied, setLinkCopied] = useState(false);
 
-  const buildReport = async (id: string) => {
+  const buildReport = async (
+    id: string,
+    restore?: { paperId: string | null; tab: ReportTab },
+  ) => {
     setError("");
     setLoading(true);
     try {
       const nextReport = await fetchGoldScoringReport(id);
       setReport(nextReport);
-      setSelectedPaperId(nextReport.papers[0]?.paper_id ?? null);
-      setActiveTab("papers");
+      const restoredPaper = nextReport.papers.find((p) => p.paper_id === restore?.paperId);
+      setSelectedPaperId(restoredPaper?.paper_id ?? nextReport.papers[0]?.paper_id ?? null);
+      setActiveTab(restore?.tab ?? "papers");
     } catch (fetchError) {
       setError(fetchError instanceof Error ? fetchError.message : "Failed to build report");
       setReport(null);
@@ -603,9 +617,54 @@ export default function GoldScoringReportView({
   };
 
   useEffect(() => {
+    if (syncUrl) {
+      const params = new URLSearchParams(window.location.search);
+      const urlExperimentId = params.get(URL_PARAMS.experiment);
+      if (urlExperimentId) {
+        setExperimentId(urlExperimentId);
+        void buildReport(urlExperimentId, {
+          paperId: params.get(URL_PARAMS.paper),
+          tab: params.get(URL_PARAMS.tab) === "frequency" ? "frequency" : "papers",
+        });
+        return;
+      }
+    }
     if (initialExperimentId) void buildReport(initialExperimentId);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-once by design
   }, []);
+
+  useEffect(() => {
+    if (!syncUrl || !report) return;
+    const url = new URL(window.location.href);
+    url.searchParams.set(URL_PARAMS.experiment, report.experiment.id);
+    if (selectedPaperId) url.searchParams.set(URL_PARAMS.paper, selectedPaperId);
+    else url.searchParams.delete(URL_PARAMS.paper);
+    if (activeTab === "frequency") url.searchParams.set(URL_PARAMS.tab, activeTab);
+    else url.searchParams.delete(URL_PARAMS.tab);
+    window.history.replaceState(window.history.state, "", url);
+  }, [syncUrl, report, selectedPaperId, activeTab]);
+
+  const copyLink = async () => {
+    const href = window.location.href;
+    try {
+      // navigator.clipboard is undefined on non-secure (plain http) origins.
+      if (navigator.clipboard) {
+        await navigator.clipboard.writeText(href);
+      } else {
+        const textarea = document.createElement("textarea");
+        textarea.value = href;
+        document.body.appendChild(textarea);
+        textarea.select();
+        const ok = document.execCommand("copy");
+        textarea.remove();
+        if (!ok) throw new Error("copy failed");
+      }
+      setLinkCopied(true);
+      setTimeout(() => setLinkCopied(false), 2000);
+    } catch {
+      setError("Couldn't copy to clipboard -- copy the address bar URL instead.");
+    }
+  };
 
   const onSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -684,6 +743,15 @@ export default function GoldScoringReportView({
               >
                 View experiment in Langfuse ↗
               </a>
+            ) : null}
+            {syncUrl ? (
+              <button
+                type="button"
+                onClick={copyLink}
+                className="soales-mono text-xs text-[#93c5fd] underline-offset-2 hover:underline"
+              >
+                {linkCopied ? "Link copied ✓" : "Copy link to this report"}
+              </button>
             ) : null}
           </div>
 

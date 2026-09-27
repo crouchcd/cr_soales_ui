@@ -26,7 +26,7 @@ export default async function SharedGoldScoringPage({
   return (
     <main className="soales-page min-h-dvh p-6 md:p-16">
       <div className="mx-auto w-full max-w-[1440px]">
-        <GoldScoringReportView />
+        <GoldScoringReportView syncUrl />
       </div>
     </main>
   );
