@@ -6,11 +6,13 @@ import GoldScoringReportView, { ExperimentPicker } from "@/components/gold-scori
 import {
   fetchDatasetItems,
   fetchExperimentStatus,
+  fetchManifestPreview,
   fetchOwnerExperiments,
   InvalidTokenError,
   startPromptExperiment,
   streamExperimentEvents,
   type ExperimentStatus,
+  type ManifestPreview,
   type PaperStatus,
 } from "@/lib/prompt-experiment-api";
 
@@ -85,6 +87,88 @@ function PaperStatusList({ paperStatus }: { paperStatus: Record<string, PaperSta
         ))}
       </div>
     </div>
+  );
+}
+
+/** Read-only view of the manifest the next run will resolve, re-fetched on
+ * demand so a just-saved Langfuse edit shows up without a page reload. */
+function ManifestPreviewPanel({
+  token,
+  onInvalidToken,
+}: {
+  token: string;
+  onInvalidToken: () => void;
+}) {
+  const [preview, setPreview] = useState<ManifestPreview | null>(null);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const load = async () => {
+    setLoading(true);
+    setError("");
+    try {
+      setPreview(await fetchManifestPreview(token));
+    } catch (err) {
+      if (err instanceof InvalidTokenError) {
+        onInvalidToken();
+        return;
+      }
+      setPreview(null);
+      setError(err instanceof Error ? err.message : "Could not load your prompt.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token]);
+
+  return (
+    <details className="soales-panel p-3" open>
+      <summary className="soales-mono flex cursor-pointer items-center gap-3 text-[10px] uppercase text-[#ccc3d8]">
+        <span>Prompt preview</span>
+        {preview ? (
+          <span className="normal-case text-[#9ca3af]">
+            {preview.manifest}
+            {preview.version != null ? ` · v${preview.version}` : " · local fallback"} ·{" "}
+            {preview.tools.length} tools
+          </span>
+        ) : null}
+        <button
+          type="button"
+          className="ml-auto normal-case text-[#93c5fd] underline-offset-2 hover:underline disabled:text-[#9ca3af]"
+          onClick={(event) => {
+            event.preventDefault();
+            load();
+          }}
+          disabled={loading}
+        >
+          {loading ? "Loading…" : "Refresh"}
+        </button>
+      </summary>
+      {error ? (
+        <p className="mt-3 rounded bg-[#93000a]/20 px-3 py-2 text-sm text-[#ffdad6]">
+          A run with this prompt would fail: {error}
+        </p>
+      ) : null}
+      {preview ? (
+        <div className="mt-3 grid max-h-96 gap-2 overflow-y-auto">
+          {preview.tools.map((tool) => (
+            <details key={tool.name} className="rounded border border-[#1f2937] px-3 py-2">
+              <summary className="cursor-pointer text-sm">
+                <span className="soales-mono text-[#dae2fd]">{tool.name}</span>
+                <span className="ml-2 text-xs text-[#9ca3af]">{tool.description}</span>
+              </summary>
+              <pre className="soales-mono mt-2 whitespace-pre-wrap break-words text-xs text-[#ccc3d8]">
+                {tool.prompt}
+              </pre>
+            </details>
+          ))}
+        </div>
+      ) : null}
+    </details>
   );
 }
 
@@ -197,6 +281,7 @@ export default function PromptExperimentRunner() {
   const [token, setToken] = useState<string | null>(null);
   const [paperIds, setPaperIds] = useState<string[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [runName, setRunName] = useState("");
   const [runId, setRunId] = useState<string | null>(null);
   const [status, setStatus] = useState<ExperimentStatus | null>(null);
   const [error, setError] = useState("");
@@ -377,10 +462,12 @@ export default function PromptExperimentRunner() {
       const result = await startPromptExperiment(
         token,
         allSelected ? undefined : Array.from(selected),
+        runName,
       );
       window.sessionStorage.setItem(RUN_ID_STORAGE_KEY, result.run_id);
       setRunId(result.run_id);
       setStatus(null);
+      setRunName("");
     } catch (err) {
       if (err instanceof InvalidTokenError) {
         onInvalidToken();
@@ -454,6 +541,9 @@ export default function PromptExperimentRunner() {
         <div className="soales-panel flex flex-wrap items-center gap-3 p-4">
           <span className="soales-loading-spinner" aria-hidden="true" />
           <span className="text-sm text-[#ccc3d8]">{status ? "Running…" : "Starting…"}</span>
+          {status?.run_name ? (
+            <span className="soales-mono truncate text-xs text-[#9ca3af]">{status.run_name}</span>
+          ) : null}
           <button
             type="button"
             className="soales-mono ml-auto text-xs text-[#9ca3af] underline-offset-2 hover:text-[#93c5fd] hover:underline"
@@ -484,6 +574,21 @@ export default function PromptExperimentRunner() {
   } else {
     body = (
       <>
+        <label className="grid max-w-md gap-1 text-sm">
+          <span className="soales-mono text-[10px] uppercase text-[#ccc3d8]">
+            Experiment name (optional)
+          </span>
+          <input
+            type="text"
+            value={runName}
+            onChange={(event) => setRunName(event.target.value)}
+            placeholder="e.g. q30-framing-v5 — defaults to a timestamp"
+            className="soales-input"
+            disabled={starting}
+            maxLength={200}
+          />
+        </label>
+        <ManifestPreviewPanel token={token} onInvalidToken={onInvalidToken} />
         <PaperPicker paperIds={paperIds} selected={selected} onChange={setSelected} disabled={starting} />
         {error ? <p className="text-sm text-[#ffb4ab]">{error}</p> : null}
         <button

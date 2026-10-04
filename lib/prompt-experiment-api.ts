@@ -21,6 +21,7 @@ const joinPath = (...parts: string[]) => {
 const EXPERIMENT_PATH = joinPath(API_PREFIX, "gold_extraction", "experiment");
 const EXPERIMENTS_LIST_PATH = joinPath(API_PREFIX, "gold_extraction", "experiments");
 const DATASET_ITEMS_PATH = joinPath(API_PREFIX, "gold_extraction", "dataset_items");
+const MANIFEST_PATH = joinPath(API_PREFIX, "gold_extraction", "manifest");
 
 export type ExperimentRunStatus = "running" | "succeeded" | "failed";
 
@@ -106,11 +107,16 @@ async function authedFetch(
 export const startPromptExperiment = async (
   token: string,
   paperIds?: string[],
+  runName?: string,
 ): Promise<ExperimentStartResult> => {
+  // Omitted fields fall back server-side (all papers; timestamped name).
+  const body: { paper_ids?: string[]; run_name?: string } = {};
+  if (paperIds) body.paper_ids = paperIds;
+  if (runName?.trim()) body.run_name = runName.trim();
   const response = await authedFetch(EXPERIMENT_PATH, token, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(paperIds ? { paper_ids: paperIds } : {}),
+    body: JSON.stringify(body),
   });
   return response.json() as Promise<ExperimentStartResult>;
 };
@@ -174,6 +180,27 @@ export async function* streamExperimentEvents(
     reader.releaseLock();
   }
 }
+
+export type ManifestTool = {
+  name: string;
+  description: string;
+  state_key: string | null;
+  prompt: string;
+};
+
+export type ManifestPreview = {
+  manifest: string;
+  // null when served from the local fallback rather than a Langfuse version.
+  version: number | null;
+  tools: ManifestTool[];
+};
+
+/** The owner's `latest` manifest -- what the next run will use. A manifest
+ * the run would reject comes back as an Error carrying the backend's reason. */
+export const fetchManifestPreview = async (token: string): Promise<ManifestPreview> => {
+  const response = await authedFetch(MANIFEST_PATH, token, { method: "GET" });
+  return response.json() as Promise<ManifestPreview>;
+};
 
 export const fetchDatasetItems = async (token: string): Promise<string[]> => {
   const response = await authedFetch(DATASET_ITEMS_PATH, token, { method: "GET" });
